@@ -60,7 +60,7 @@ try{
  assert.equal((Buffer.concat(parts).length-44)/6,33600);
  await page.getByRole("button",{name:"Mover segmento voz-b",exact:true}).click();
  await page.getByLabel("Posición (s)",{exact:true}).fill("2");
- await page.getByRole("button",{name:"Reproducir este audio en loop",exact:true}).click();
+ await page.getByRole("button",{name:"Reproducir este segmento en loop",exact:true}).click();
  await page.waitForTimeout(650);
  node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop,active:window.__audioSources.filter(n=>n.__active).length};});
  assert(Math.abs(node.duration-.2)<.001);assert(node.loop);assert.equal(node.active,1);

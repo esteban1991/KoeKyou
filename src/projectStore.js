@@ -41,7 +41,7 @@ export function useProjectStore({tracks,setTracks,settings,preset,onSettings,onR
   const state=await(await request("/"+id)).json();
   const buffers=await Promise.all(state.tracks.map(async(t,i)=>{
    const pcm=new Float32Array(await(await request("/"+id+"/tracks/"+i)).arrayBuffer());
-   if(pcm.length!==t.channels*t.frames)throw new Error("Una pista guardada estÃ¡ incompleta.");
+   if(pcm.length!==t.channels*t.frames)throw new Error("Un segmento guardado está incompleto.");
    const buffer=new AudioBuffer({length:t.frames,numberOfChannels:t.channels,sampleRate:t.sampleRate});
    for(let c=0;c<t.channels;c++)buffer.copyToChannel(pcm.subarray(c*t.frames,(c+1)*t.frames),c);
    let originalBuffer=null;

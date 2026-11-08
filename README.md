@@ -16,10 +16,19 @@ Abrir http://localhost:5173. Para detener sin borrar proyectos:
 docker compose down
 ```
 
+## Términos
+La interfaz usa siempre la misma jerarquía:
+- **Proyecto**: todo lo que se guarda y se abre junto (nombre, ajustes maestros y audio).
+- **Pista**: una fila de la línea de tiempo (voz, música…).
+- **Segmento**: un bloque de audio dentro de una pista; se graba, importa, corta y mueve.
+- **Capa**: un efecto añadido a un segmento (Podcast, Catedral…); se activan y combinan.
+
+En el código un segmento es un elemento de `tracks` y su pista es `laneId`.
+
 ## Flujo de trabajo
 1. Menú del estudio > Grabar o Importar archivo. Solo se abre el panel elegido.
 2. Al grabar, permite el micrófono. La onda, nivel dBFS y tiempo aparecen en directo.
-3. Detener incorpora la toma final. Hasta 10 minutos por toma y 16 pistas por proyecto.
+3. Detener incorpora el segmento grabado. Hasta 10 minutos por grabación y 16 segmentos por proyecto.
 4. Selecciona una pista con su nombre o su onda.
 5. Editar pista, arriba de las pistas, permite introducir Inicio y Fin, conservar o
    borrar la selección y dividir en Inicio. También puedes seleccionar arrastrando.
@@ -141,7 +150,13 @@ al recargar, duplicar y cambiar proyectos.
 
 ## Archivos principales
 - src/App.jsx: panel lateral de efectos, presets y aplicación DSP.
-- src/AudioEditor.jsx: grabación, edición, reproducción y menú.
+- src/AudioEditor.jsx: solo renderiza el editor y conecta los hooks.
+- src/hooks/useAudioEngine.js: AudioContext compartido.
+- src/hooks/useAudioPlayback.js: reproducción, loop, cursor y barra de posición.
+- src/hooks/useAudioRecording.js: micrófono, PCM, medidores y segmento provisional.
+- src/hooks/useAudioEditing.js: añadir, cortar, mover, combinar, velocidad y deshacer.
+- src/hooks/useTrackEffects.js: cola de procesamiento de las capas de cada segmento.
+- src/hooks/useTimeline.js: geometría de la línea de tiempo y gestos de arrastre.
 - src/LiveRecording.jsx y public/recorder-worklet.js: onda y captura PCM.
 - src/audio.js: recortes, mezcla y codificación WAV.
 - src/projectStore.js: apertura, autoguardado y duplicación.
