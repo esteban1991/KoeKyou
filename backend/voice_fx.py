@@ -99,37 +99,60 @@ def enhance(audio, rate, denoise=0, leveler=0, pitch=0, roomtail=0):
         audio = PitchShift(semitones=pitch)(audio, rate)
     return np.asarray(audio, dtype=np.float32)
 
+def _voicing(signal, rate, hop):
+    """Periodicidad por tramo (0-1): autocorrelación normalizada en el rango de tono
+    de la voz (70-400 Hz). La voz supera ~0,5; el aire y el ruido quedan por debajo."""
+    size = hop * 3
+    count = (signal.size - size) // hop + 1
+    if count <= 0:
+        return np.zeros(signal.size // hop)
+    frames = np.lib.stride_tricks.sliding_window_view(signal, size)[::hop][:count]
+    frames = frames - frames.mean(axis=1, keepdims=True)
+    spectrum = np.fft.rfft(frames, n=4096, axis=1)
+    ac = np.fft.irfft(np.abs(spectrum) ** 2, axis=1)
+    lags = slice(rate // 400, rate // 70)
+    result = ac[:, lags].max(axis=1) / (ac[:, 0] + 1e-12)
+    return np.pad(result, (0, signal.size // hop - count), mode="edge")
+
 def reduce_breaths(audio, rate, amount):
-    """Atenúa respiraciones sin cortar: tramos sin voz (poca energía grave), sin
-    sibilancia, al menos 12 dB por debajo de la voz y de 120 ms a 1,2 s."""
+    """Atenúa respiraciones sin mover el audio: tramos sin tono de voz, de 150 ms
+    a 1,5 s, al menos 10 dB por debajo de la voz y sin sibilancia dominante.
+    Al 100 % los silencia por completo."""
     frame = int(rate * 0.01)
     usable = audio.shape[1] // frame * frame
     if amount <= 0 or rate < 22050 or usable < frame * 50:
         return audio
     bands = [butter(4, low_high, btype="bandpass", fs=rate, output="sos")
-             for low_high in ([100, 500], [1000, 4000], [5000, 10000])]
-    mono = audio.mean(axis=0)
+             for low_high in ([1000, 4000], [5000, 10000])]
+    mono = audio.mean(axis=0).astype(np.float64)
     chunk, margin = frame * 3000, frame * 50
-    levels = [[] for _ in range(4)]
+    total, mid, high, voiced = [], [], [], []
     for start in range(0, usable, chunk):
         end = min(start + chunk, usable)
         left, right = max(0, start - margin), min(usable, end + margin)
         segment = mono[left:right]
-        for i, signal in enumerate([segment] + [sosfilt(sos, segment) for sos in bands]):
-            power = (signal[start - left:end - left].reshape(-1, frame) ** 2).mean(axis=1)
-            levels[i].append(10 * np.log10(power + 1e-12))
-    total, low, mid, high = (np.concatenate(level) for level in levels)
-    voice, floor = np.percentile(total, 95), np.percentile(total, 10)
-    candidate = (total < voice - 12) & (total > floor + 3) & (low < mid - 3) & (high < mid + 3)
-    candidate = binary_closing(candidate, structure=np.ones(3))
+        db = lambda signal: 10 * np.log10((signal[start - left:end - left].reshape(-1, frame) ** 2).mean(axis=1) + 1e-12)
+        total.append(db(segment))
+        mid.append(db(sosfilt(bands[0], segment)))
+        high.append(db(sosfilt(bands[1], segment)))
+        voiced.append(_voicing(segment, rate, frame)[(start - left) // frame:(end - left) // frame])
+    total, mid, high, voiced = (np.concatenate(v) for v in (total, mid, high, voiced))
+    audible = total > -100                      # ignora el silencio digital
+    if audible.sum() < 50:
+        return audio
+    voice = np.percentile(total[audible], 95)
+    floor = np.percentile(total[audible], 5)
+    candidate = (voiced < 0.45) & (total < voice - 10) & (total > floor + 6) & (high - mid < 12)
+    candidate = binary_closing(candidate, structure=np.ones(6))  # une huecos de hasta 50 ms
     labels, count = label(candidate)
     if not count:
         return audio
     sizes = np.bincount(labels)
-    keep = (sizes >= 12) & (sizes <= 120)
+    sibilance = np.bincount(labels, weights=high - mid) / np.maximum(sizes, 1)
+    keep = (sizes >= 15) & (sizes <= 150) & (sibilance < 6)
     keep[0] = False
     breath = keep[labels]
-    cut = 10 ** (-30 * amount / 100 / 20)
+    cut = 0.0 if amount >= 100 else 10 ** (-40 * amount / 100 / 20)
     gain = np.repeat(np.where(breath, cut, 1.0), frame)
     gain = uniform_filter1d(gain, int(rate * 0.015))  # fundidos de ~15 ms, sin clics
     gain = np.pad(gain, (0, audio.shape[1] - gain.size), constant_values=1.0)
