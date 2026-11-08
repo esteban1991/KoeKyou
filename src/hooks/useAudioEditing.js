@@ -1,12 +1,12 @@
 import {useState} from "react";
 import {sliceAudio,deleteAudio,mixTracks} from "../audio";
-import {changeTempo} from "../fx";
+import {changeTempo,stretchPauses} from "../fx";
 export const MAX_SEGMENTS=16;
 const checkFile=file=>{if(!/\.(wav|mp3)$/i.test(file.name)||file.size>100*1024*1024)throw new Error("Usa WAV o MP3 de hasta 100 MB.");};
 const checkBuffer=buffer=>{if(buffer.duration>900||buffer.numberOfChannels>2)throw new Error("Cada archivo debe ser mono o estéreo y durar hasta 15 minutos.");};
 // Operaciones sobre los segmentos del proyecto: añadir, cortar, mover, combinar y deshacer.
 export function useAudioEditing({engine,tracks,setTracks,latestTracks,selected,setSelected,playback,setError,setWorking,setReveal,fxPending}){
- const [selection,setSelection]=useState([0,0]),[history,setHistory]=useState([]),[tempo,setTempo]=useState(1);
+ const [selection,setSelection]=useState([0,0]),[history,setHistory]=useState([]),[tempo,setTempo]=useState(1),[pauses,setPauses]=useState({amount:60,minimum:1});
  const [placement,setPlacement]=useState("end"),[destination,setDestination]=useState("current");
  const track=tracks.find(t=>t.id===selected);
  const currentLane=track?.laneId||tracks[0]?.laneId||"primary";
@@ -85,6 +85,17 @@ export function useAudioEditing({engine,tracks,setTracks,latestTracks,selected,s
    setSelection([0,buffer.duration]);
   }catch(e){setError(e.message);}finally{setWorking(false);}
  }
+ // Ritmo de narración: alarga los silencios del segmento (se puede deshacer).
+ async function applyPauses(){
+  if(!track)return;setWorking(true);setError("");playback.stop();
+  try{
+   const blob=await stretchPauses(track.originalBuffer||track.buffer,pauses.amount,pauses.minimum);
+   const buffer=await engine.editingContext().decodeAudioData(await blob.arrayBuffer());
+   if(Math.abs(buffer.duration-(track.originalBuffer||track.buffer).duration)<.01)throw new Error("No se encontraron pausas entre frases para alargar.");
+   change(latestTracks.current.map(t=>t.id===track.id?rebased(t,buffer):t));
+   setSelection([0,buffer.duration]);
+  }catch(e){setError(e.message);}finally{setWorking(false);}
+ }
  function combine(){
   setError("");
   try{
@@ -96,5 +107,5 @@ export function useAudioEditing({engine,tracks,setTracks,latestTracks,selected,s
    change([...tracks.filter(t=>t.muted),combined]);choose(combined);
   }catch(e){setError(e.message);}
  }
- return {track,selection,setSelection,history,setHistory,remember,tempo,setTempo,placement,setPlacement,destination,setDestination,currentLane,insertionPoint,targetLane,change,choose,addBuffers,importFiles,commitRecording,undo,edit,patch,moveTo,remove,applyTempo,replaceOriginal,combine};
+ return {track,selection,setSelection,history,setHistory,remember,tempo,setTempo,placement,setPlacement,destination,setDestination,currentLane,insertionPoint,targetLane,change,choose,addBuffers,importFiles,commitRecording,undo,edit,patch,moveTo,remove,applyTempo,pauses,setPauses,applyPauses,replaceOriginal,combine};
 }

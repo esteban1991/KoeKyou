@@ -76,7 +76,7 @@ export function useProjectStore({tracks,setTracks,settings,preset,onSettings,onR
     originalBuffer=fromPcm(await fetchPcm(t.originalHash,t.originalFrames*t.originalChannels,"La fuente original está incompleta."),t.originalFrames,t.originalChannels,t.sampleRate);
     hashes.set(originalBuffer,Promise.resolve(t.originalHash));stored.current.add(t.originalHash);
    }
-   return {id:t.id,laneId:t.laneId||"primary",name:t.name,gain:t.gain,offset:t.offset,muted:t.muted,processed:t.processed||false,sourceDescription:t.sourceDescription||"",effects:t.effects||[],renderedEffects:t.renderedEffects||"",buffer,originalBuffer};
+   return {id:t.id,laneId:t.laneId||"primary",name:t.name,gain:t.gain,offset:t.offset,muted:t.muted,processed:t.processed||false,sourceDescription:t.sourceDescription||"",effects:t.effects||[],renderedEffects:t.renderedEffects||"",duck:t.duck||0,fadeIn:t.fadeIn||0,fadeOut:t.fadeOut||0,buffer,originalBuffer};
   }));
   if(!alive.current)return;
   latest.current.onReset();setTracks(buffers);latest.current.onSettings(state.settings,state.preset);

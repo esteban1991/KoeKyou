@@ -240,3 +240,18 @@ El título neón aparece arriba; la pestaña y la ventana nativa usan el nuevo n
 El obake de la esquina inferior izquierda flota, parpadea y saluda al pulsarlo.
 La × lo oculta y el pequeño botón inferior lo recupera. Respeta movimiento reducido.
 La base de proyectos y el volumen Docker conservan sus identificadores para preservar las sesiones existentes.
+
+## Narración: pausas, música de fondo y capa reflexiva
+- **Alargar pausas** (Editar segmento): estira los silencios entre frases un 30–150 % y con un
+  mínimo opcional (0,8–2 s), hasta 3 s. La voz no se toca: el hueco se rellena con el tono de sala
+  de la propia pausa, con fundidos de potencia constante. No toca el silencio inicial ni final y
+  se puede deshacer. API: `POST /pauses` (`amount`, `minimum`).
+- **Bajar con la voz** (panel del segmento): para música de fondo en otra pista. La música baja
+  6–24 dB mientras suena la voz de los demás segmentos (en ~60 ms), espera 300 ms y sube en las
+  pausas (~700 ms). Se escucha, se exporta y se guarda con el proyecto.
+- **Entrada / Salida (s)**: fundidos de cualquier segmento, útiles para la música.
+- **Narración reflexiva** (capa): compresión suave, sala íntima, agudos con aire, tono −1 st y
+  respiraciones al 40 %. Combínala con Alargar pausas y Volumen objetivo −19 LUFS.
+- Velocidad 0,9× para un ritmo algo más pausado.
+
+Prueba: `node tests/narration.mjs`.

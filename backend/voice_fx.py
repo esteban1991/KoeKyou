@@ -157,3 +157,66 @@ def reduce_breaths(audio, rate, amount):
     gain = uniform_filter1d(gain, int(rate * 0.015))  # fundidos de ~15 ms, sin clics
     gain = np.pad(gain, (0, audio.shape[1] - gain.size), constant_values=1.0)
     return (audio * gain.astype(np.float32)).astype(np.float32)
+
+def _room_tone(pause, length, rate, seed=0):
+    """Textura continua hecha con granos del propio silencio (raíz de Hann al 50 %:
+    potencia constante), para alargar una pausa sin dejar silencio digital."""
+    inner = pause[:, pause.shape[1] // 4: pause.shape[1] * 3 // 4]
+    window = int(rate * 0.08)
+    if inner.shape[1] <= window:
+        inner = pause
+    window = min(window, inner.shape[1] - 1) // 2 * 2
+    hop = window // 2
+    shape = np.sqrt(np.hanning(window + 1)[:-1]).astype(np.float32)
+    grains = length // hop + 3
+    out = np.zeros((pause.shape[0], (grains + 1) * hop), dtype=np.float32)
+    starts = np.random.default_rng(seed).integers(0, inner.shape[1] - window + 1, grains)
+    for i, start in enumerate(starts):
+        out[:, i * hop:i * hop + window] += inner[:, start:start + window] * shape
+    return out[:, hop:hop + length]
+
+def stretch_pauses(audio, rate, amount=60, minimum=0.0, shortest=0.3, longest=3.0):
+    """Alarga los silencios entre frases (no los del principio ni el final): cada pausa de
+    al menos `shortest` s crece un `amount` % y dura como mínimo `minimum` s, hasta `longest`.
+    La voz no se toca; el hueco se rellena con el tono de sala de la propia pausa."""
+    frame = int(rate * 0.01)
+    usable = audio.shape[1] // frame * frame
+    if (amount <= 0 and minimum <= 0) or usable < frame * 50:
+        return audio
+    mono = audio.mean(axis=0)
+    db = 10 * np.log10((mono[:usable].reshape(-1, frame).astype(np.float64) ** 2).mean(axis=1) + 1e-12)
+    audible = db > -100
+    voice = np.percentile(db[audible], 95) if audible.sum() >= 50 else -20
+    sounding = np.flatnonzero(db >= voice - 28)
+    if sounding.size == 0:
+        return audio
+    # Un clic de hasta 80 ms no parte la pausa en dos.
+    silent = binary_closing(db < voice - 28, structure=np.ones(8))
+    silent[:sounding[0]] = silent[sounding[-1] + 1:] = False  # solo pausas entre frases
+    labels, count = label(silent)
+    fade = int(rate * 0.03)
+    ramp = np.sin(np.linspace(0, np.pi / 2, fade, dtype=np.float32))  # potencia constante
+    pieces, cursor, added = [], 0, 0
+    for index in range(1, count + 1):
+        frames = np.flatnonzero(labels == index)
+        start, end = frames[0] * frame, (frames[-1] + 1) * frame
+        length = (end - start) / rate
+        if length < shortest:
+            continue
+        target = min(longest, max(length * (1 + amount / 100), minimum))
+        extra = int((target - length) * rate)
+        if extra <= 0:
+            continue
+        middle = (start + end) // 2
+        tone = _room_tone(audio[:, start:end], extra + 2 * fade, rate, seed=index)
+        left = audio[:, cursor:middle].copy()
+        left[:, -fade:] = left[:, -fade:] * ramp[::-1] + tone[:, :fade] * ramp
+        pieces += [left, tone[:, fade:-fade]]
+        # La mitad derecha de la pausa entra con el fundido inverso.
+        audio = audio.copy() if not added else audio
+        audio[:, middle:middle + fade] = audio[:, middle:middle + fade] * ramp + tone[:, -fade:] * ramp[::-1]
+        cursor, added = middle, added + extra
+    if not added:
+        return audio
+    pieces.append(audio[:, cursor:])
+    return np.concatenate(pieces, axis=1).astype(np.float32)

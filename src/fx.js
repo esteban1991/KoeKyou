@@ -27,6 +27,13 @@ export async function processLayers(buffer,layers,master,signal,onProgress=()=>{
  }
  return {blob,stats};
 }
+// Alarga los silencios entre frases; la voz no cambia. Devuelve el segmento completo, más largo.
+export async function stretchPauses(buffer,amount,minimum){
+ const form=new FormData();form.append("file",wav(buffer),"voz.wav");form.append("amount",amount);form.append("minimum",minimum);
+ const response=await fetch(API+"/pauses",{method:"POST",body:form});
+ if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(typeof body.detail==="string"?body.detail:"No se pudieron alargar las pausas.");}
+ return response.blob();
+}
 export async function changeTempo(buffer,speed){
  const form=new FormData();form.append("file",wav(buffer),"voz.wav");form.append("speed",speed);
  const response=await fetch(API+"/tempo",{method:"POST",body:form});

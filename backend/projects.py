@@ -42,7 +42,7 @@ class Settings(BaseModel):
 class EffectLayer(BaseModel):
     id: str = Field(max_length=100)
     name: str = Field(max_length=100)
-    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer"]
+    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer", "narrator"]
     enabled: bool = True
     settings: Settings = Field(default_factory=Settings)
 
@@ -57,6 +57,9 @@ class Track(BaseModel):
     sourceDescription: str = Field("", max_length=180)
     effects: list[EffectLayer] = Field(default_factory=list, max_length=6)
     renderedEffects: str = Field("", max_length=100000)
+    duck: float = Field(0, ge=-30, le=0)      # dB que baja mientras suena la voz (música de fondo)
+    fadeIn: float = Field(0, ge=0, le=30)
+    fadeOut: float = Field(0, ge=0, le=30)
     hash: str = Field(pattern=HASH)
     originalHash: str = Field("", pattern="^([0-9a-f]{64})?$")
     originalFrames: int = Field(0, ge=0, le=48000*924)
@@ -68,7 +71,7 @@ class Track(BaseModel):
 class Project(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     settings: Settings = Field(default_factory=Settings)
-    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer"] = "podcast"
+    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer", "narrator"] = "podcast"
     tracks: list[Track] = Field(default_factory=list, max_length=16)
 
 def digest(pcm):

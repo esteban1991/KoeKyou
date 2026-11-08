@@ -10,6 +10,7 @@ const presets={
  announcer:{name:"Locutor",description:"Más cuerpo, presencia y nivelado.",settings:{depth:6,clarity:4,compression:70,cleanup:30,deess:40,leveler:65}},
  room:{name:"Habitación cerrada",description:"Reflejos cortos y discretos.",settings:{depth:3,clarity:2,compression:40,cleanup:20}},
  outdoor:{name:"Aire libre",description:"Voz seca y reducción espectral moderada.",settings:{depth:1,clarity:5,compression:45,cleanup:65,denoise:25}},
+ narrator:{name:"Narración reflexiva",description:"Calma y cercanía: compresión suave, sala íntima, voz algo más grave y aire en los agudos. Combínala con Alargar pausas y -19 LUFS.",settings:{depth:4,clarity:5,compression:35,cleanup:20,deess:35,leveler:40,pitch:-1,breath:40}},
  cathedral:{name:"Catedral",description:"Reverberación amplia con 4 segundos de cola.",settings:{depth:3,clarity:3,compression:35,cleanup:10}}
 };
 const microphones={dynamic:"Dinámico",condenser:"Condensador",usb:"USB",lavalier:"Solapa",laptop:"Portátil",generic:"Genérico"};

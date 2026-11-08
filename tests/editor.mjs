@@ -98,8 +98,8 @@ try{
  await page.getByRole("button",{name:"Activar capa",exact:true}).click();await readyFX();
  assert.equal(await page.locator(".audio-track").count(),1);
  await page.getByRole("button",{name:"Grabar voz",exact:true}).click();await page.waitForTimeout(1100);
- await page.getByRole("button",{name:/Detener ·/}).click();await saved();
- assert.equal(await page.locator(".audio-track").count(),2);
+ await page.getByRole("button",{name:/Detener ·/}).click();
+ await page.waitForFunction(()=>document.querySelectorAll(".audio-track").length===2);await saved();
  const twoTakes=await state();assert.equal(twoTakes.tracks[1].effects.length,0);
  assert.equal(await page.locator(".fx-scroll").count(),0);
  await page.getByRole("button",{name:"Combinar en uno",exact:true}).click();

@@ -9,7 +9,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from projects import router as projects_router
-from voice_fx import enhance, dynamic_deess, reduce_breaths, MICROPHONES
+from voice_fx import enhance, dynamic_deess, reduce_breaths, stretch_pauses, MICROPHONES
 from mastering import denoise_ai, master, loudness, true_peak_db
 from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, Compressor, HighShelfFilter, NoiseGate, Reverb
 from pedalboard.io import AudioFile
@@ -52,7 +52,7 @@ def process_audio(
     breath: float = Form(0, ge=0, le=100),
     mic: Literal["generic", "dynamic", "condenser", "usb", "lavalier", "laptop"] = Form("generic"),
     loudness_target: Literal["off", "-14", "-16", "-19"] = Form("-16", alias="loudness"),
-    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer"] = Form("podcast"),
+    preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer", "narrator"] = Form("podcast"),
 ):
     # Endpoint síncrono: FastAPI ejecuta el DSP en su pool de hilos.
     if not processing_lock.acquire(blocking=False):
@@ -110,16 +110,16 @@ def process_audio(
             ])(audio, rate)
             # Después del realce de agudos, que es lo que hace sobresalir las eses.
             audio = dynamic_deess(audio, rate, deess, profile["deess"])
-            if preset in {"room", "cathedral"}:
-                cathedral = preset == "cathedral"
-                reverb = Reverb(
-                    room_size=0.93 if cathedral else 0.25,
-                    damping=0.35 if cathedral else 0.75,
-                    wet_level=0.36 if cathedral else 0.10,
-                    dry_level=0.8 if cathedral else 0.95,
-                    width=1.0 if cathedral else 0.6,
-                )
-                audio = np.pad(audio, ((0, 0), (0, int(rate * (4 if cathedral else 1)))))
+            # Salas: (tamaño, amortiguación, húmedo, seco, anchura, cola en s).
+            # Narración: sala íntima algo mayor que Habitación, con agudos apagados.
+            rooms = {"room": (0.25, 0.75, 0.10, 0.95, 0.6, 1),
+                     "narrator": (0.38, 0.7, 0.12, 0.93, 0.8, 1.5),
+                     "cathedral": (0.93, 0.35, 0.36, 0.8, 1.0, 4)}
+            if preset in rooms:
+                size, damping, wet, dry, width, tail = rooms[preset]
+                reverb = Reverb(room_size=size, damping=damping, wet_level=wet,
+                                dry_level=dry, width=width)
+                audio = np.pad(audio, ((0, 0), (0, int(rate * tail))))
                 audio = reverb(audio, rate)
             target = None if loudness_target == "off" else float(loudness_target)
             processed = master(audio, rate, target, TRUE_PEAK_CEILING)
@@ -146,41 +146,69 @@ def process_audio(
         file.file.close()
         processing_lock.release()
 
-@app.post("/tempo")
-def tempo(file: UploadFile = File(...), speed: float = Form(1, ge=.5, le=2)):
-    from pedalboard import time_stretch
+def _read_upload(file, folder):
+    """Lee un WAV/MP3 subido (máx. 100 MB, mono o estéreo) y devuelve (audio, rate)."""
+    source = Path(folder) / "input.wav"
+    size = 0
+    with source.open("wb") as target:
+        while chunk := file.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_BYTES:
+                raise HTTPException(413, "El segmento supera los 100 MB.")
+            target.write(chunk)
+    try:
+        with AudioFile(str(source)) as reader:
+            rate = reader.samplerate
+            if reader.num_channels not in (1, 2) or not reader.frames:
+                raise ValueError("channels or empty file")
+            audio = reader.read(reader.frames)
+    except Exception as exc:
+        raise HTTPException(422, "No se pudo leer el segmento.") from exc
+    if not np.isfinite(audio).all():
+        raise HTTPException(422, "El audio contiene datos inválidos.")
+    return audio, rate
+
+def _wav(audio, rate):
+    output = io.BytesIO()
+    with AudioFile(output, "w", samplerate=rate, num_channels=audio.shape[0],
+                   format="wav", bit_depth=24) as writer:
+        writer.write(audio)
+    return Response(output.getvalue(), media_type="audio/wav")
+
+def _exclusive(fn):
+    """Una operación de DSP a la vez; las demás reciben 429 y el cliente reintenta."""
     if not processing_lock.acquire(blocking=False):
         raise HTTPException(429, "El motor está ocupado. Espera a que terminen los efectos.")
     try:
-        with tempfile.TemporaryDirectory(prefix="voicemaster-tempo-") as folder:
-            source = Path(folder) / "input.wav"
-            size = 0
-            with source.open("wb") as target:
-                while chunk := file.file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > MAX_BYTES:
-                        raise HTTPException(413, "La pista supera los 100 MB.")
-                    target.write(chunk)
-            try:
-                with AudioFile(str(source)) as reader:
-                    rate = reader.samplerate
-                    if reader.num_channels not in (1, 2) or not reader.frames:
-                        raise ValueError("channels or empty file")
-                    if reader.frames / rate / speed > MAX_SECONDS:
-                        raise HTTPException(422, "La velocidad elegida produciría más de 15 minutos.")
-                    audio = reader.read(reader.frames)
-            except HTTPException:
-                raise
-            except Exception as exc:
-                raise HTTPException(422, "No se pudo leer la pista.") from exc
-            if not np.isfinite(audio).all():
-                raise HTTPException(422, "El audio contiene datos inválidos.")
-            result = time_stretch(audio, rate, stretch_factor=speed)
-            output = io.BytesIO()
-            with AudioFile(output, "w", samplerate=rate, num_channels=result.shape[0],
-                           format="wav", bit_depth=24) as writer:
-                writer.write(result)
-            return Response(output.getvalue(), media_type="audio/wav")
+        with tempfile.TemporaryDirectory(prefix="voicemaster-edit-") as folder:
+            return fn(folder)
+    finally:
+        processing_lock.release()
+
+@app.post("/tempo")
+def tempo(file: UploadFile = File(...), speed: float = Form(1, ge=.5, le=2)):
+    from pedalboard import time_stretch
+    def run(folder):
+        audio, rate = _read_upload(file, folder)
+        if audio.shape[1] / rate / speed > MAX_SECONDS:
+            raise HTTPException(422, "La velocidad elegida produciría más de 15 minutos.")
+        return _wav(time_stretch(audio, rate, stretch_factor=speed), rate)
+    try:
+        return _exclusive(run)
     finally:
         file.file.close()
-        processing_lock.release()
+
+@app.post("/pauses")
+def pauses(file: UploadFile = File(...), amount: float = Form(60, ge=0, le=200),
+           minimum: float = Form(0, ge=0, le=3)):
+    """Alarga los silencios entre frases sin tocar la voz (ritmo de narración)."""
+    def run(folder):
+        audio, rate = _read_upload(file, folder)
+        result = stretch_pauses(audio, rate, amount, minimum)
+        if result.shape[1] / rate > MAX_SECONDS:
+            raise HTTPException(422, "Con pausas más largas superaría los 15 minutos.")
+        return _wav(result, rate)
+    try:
+        return _exclusive(run)
+    finally:
+        file.file.close()

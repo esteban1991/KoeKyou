@@ -33,18 +33,46 @@ export function deleteAudio(context,buffer,start,end){
  }
  return result;
 }
+const FRAME=480; // 10 ms a 48 kHz
+// Curva de ducking (0..1 por bloque de 10 ms): 1 en silencio, `depth` mientras suena la voz.
+// Baja en ~60 ms, espera 300 ms por si sigue la frase y sube en ~700 ms: la música respira en las pausas.
+function duckCurve(voices,frames,depth){
+ const energy=new Float32Array(frames);
+ for(const t of voices){
+  const offset=Math.round(t.offset*RATE),gain=10**(t.gain/20),source=t.buffer.getChannelData(0);
+  for(let i=0;i<source.length;i++){const f=((i+offset)/FRAME)|0;if(f>=frames)break;const v=source[i]*gain;energy[f]+=v*v;}
+ }
+ const curve=new Float32Array(frames),down=1-Math.exp(-10/60),up=1-Math.exp(-10/700);
+ let level=1,hold=0;
+ for(let f=0;f<frames;f++){
+  if(10*Math.log10(energy[f]/FRAME+1e-12)>-45)hold=30;else if(hold>0)hold--;
+  const target=hold>0?depth:1;level+=(target-level)*(target<level?down:up);curve[f]=level;
+ }
+ return curve;
+}
+// Segmentos marcados con `duck` (música de fondo) bajan cuando suenan los demás; `fadeIn`/`fadeOut` en segundos.
 export function mixTracks(context,tracks){
  const active=tracks.filter(t=>!t.muted);
- if(!active.length)throw new Error("Activa al menos una pista.");
+ if(!active.length)throw new Error("Activa al menos un segmento.");
  const duration=Math.max(...active.map(t=>t.offset+t.buffer.duration));
  if(duration>900)throw new Error("La mezcla puede durar como máximo 15 minutos.");
  const result=context.createBuffer(2,Math.max(1,Math.ceil(duration*RATE)),RATE);
+ const frames=Math.ceil(result.length/FRAME)+1,voices=active.filter(t=>!t.duck),curves=new Map();
  for(const track of active){
-  if(track.buffer.sampleRate!==RATE)throw new Error("La pista debe estar a 48 kHz.");
-  const offset=Math.round(track.offset*RATE),gain=10**(track.gain/20);
+  if(track.buffer.sampleRate!==RATE)throw new Error("El segmento debe estar a 48 kHz.");
+  const offset=Math.round(track.offset*RATE),gain=10**(track.gain/20),length=track.buffer.length;
+  const fadeIn=Math.round((track.fadeIn||0)*RATE),fadeOut=Math.round((track.fadeOut||0)*RATE);
+  let duck=null;
+  if(track.duck&&voices.length){if(!curves.has(track.duck))curves.set(track.duck,duckCurve(voices,frames,10**(track.duck/20)));duck=curves.get(track.duck);}
   for(let c=0;c<2;c++){
    const source=track.buffer.getChannelData(Math.min(c,track.buffer.numberOfChannels-1)),target=result.getChannelData(c);
-   for(let i=0;i<source.length&&i+offset<target.length;i++)target[i+offset]+=source[i]*gain;
+   for(let i=0;i<length&&i+offset<target.length;i++){
+    let g=gain;
+    if(i<fadeIn)g*=i/fadeIn;
+    if(length-i<fadeOut)g*=(length-i)/fadeOut;
+    if(duck){const p=(i+offset)/FRAME,f=p|0;g*=duck[f]+(duck[f+1]-duck[f])*(p-f);}
+    target[i+offset]+=source[i]*g;
+   }
   }
  }
  let peak=0;
