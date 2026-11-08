@@ -2,13 +2,31 @@ import {useEffect,useRef,useState} from "react";
 const API="http://127.0.0.1:8000";
 async function request(path,options){
  const response=await fetch(API+"/projects"+path,options);
- if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(typeof body.detail==="string"?body.detail:"No se pudo acceder a la base de proyectos.");}
+ if(!response.ok){
+  const body=await response.json().catch(()=>({})),detail=body.detail;
+  const error=new Error(typeof detail==="string"?detail:detail?.message||"No se pudo acceder a la base de proyectos.");
+  error.missing=detail?.missing;throw error;
+ }
  return response;
+}
+// PCM de un AudioBuffer con los canales seguidos, tal como se guarda en SQLite.
+const pcmOf=buffer=>new Blob(Array.from({length:buffer.numberOfChannels},(_,c)=>buffer.getChannelData(c)),{type:"application/octet-stream"});
+// Los AudioBuffer no se modifican tras crearse (cada edición crea uno nuevo), así que su hash
+// se calcula una sola vez. SHA-256 porque WebCrypto no incluye MD5.
+const hashes=new WeakMap();
+function hashOf(buffer){
+ if(!hashes.has(buffer))hashes.set(buffer,pcmOf(buffer).arrayBuffer().then(data=>crypto.subtle.digest("SHA-256",data)).then(d=>Array.from(new Uint8Array(d),b=>b.toString(16).padStart(2,"0")).join("")));
+ return hashes.get(buffer);
+}
+function fromPcm(pcm,frames,channels,sampleRate){
+ const buffer=new AudioBuffer({length:frames,numberOfChannels:channels,sampleRate});
+ for(let c=0;c<channels;c++)buffer.copyToChannel(pcm.subarray(c*frames,(c+1)*frames),c);
+ return buffer;
 }
 export function useProjectStore({tracks,setTracks,settings,preset,onSettings,onReset}){
  const [project,setProject]=useState(null),[projects,setProjects]=useState([]),[ready,setReady]=useState(false),[switching,setSwitching]=useState(false);
  const [status,setStatus]=useState("Cargando proyectos…"),[error,setError]=useState("");
- const timer=useRef(null),queue=useRef(Promise.resolve()),dirty=useRef(false),alive=useRef(true),latest=useRef(null),generation=useRef(0);
+ const timer=useRef(null),queue=useRef(Promise.resolve()),dirty=useRef(false),alive=useRef(true),latest=useRef(null),generation=useRef(0),stored=useRef(new Set());
  latest.current={tracks,settings,preset,project,onSettings,onReset};
  const refresh=async()=>{const rows=await(await request("")).json();if(alive.current)setProjects(rows);return rows;};
  const remember=id=>{try{localStorage.setItem("voicemaster-project",id);}catch{}};
@@ -16,14 +34,19 @@ export function useProjectStore({tracks,setTracks,settings,preset,onSettings,onR
   const task=async()=>{
    if(!snapshot.project)return;
    if(alive.current)setStatus("Guardando…");
-   const audio=snapshot.tracks.map(t=>({...t,buffer:undefined,originalBuffer:undefined,originalFrames:t.originalBuffer?.length||0,originalChannels:t.originalBuffer?.numberOfChannels||0,channels:t.buffer.numberOfChannels,frames:t.buffer.length,sampleRate:t.buffer.sampleRate}));
-   const form=new FormData();
-   form.append("manifest",JSON.stringify({name:snapshot.project.name,settings:snapshot.settings,preset:snapshot.preset,tracks:audio}));
-   snapshot.tracks.forEach(t=>{const channels=Array.from({length:t.buffer.numberOfChannels},(_,c)=>t.buffer.getChannelData(c));form.append("audio",new Blob(channels,{type:"application/octet-stream"}),"track.pcm");});
-   snapshot.tracks.filter(t=>t.originalBuffer).forEach(t=>{
-    form.append("originals",new Blob(Array.from({length:t.originalBuffer.numberOfChannels},(_,c)=>t.originalBuffer.getChannelData(c))),"original.pcm");
-   });
-   await request("/"+snapshot.project.id,{method:"PUT",body:form});
+   const audio=await Promise.all(snapshot.tracks.map(async t=>({...t,buffer:undefined,originalBuffer:undefined,hash:await hashOf(t.buffer),originalHash:t.originalBuffer?await hashOf(t.originalBuffer):"",originalFrames:t.originalBuffer?.length||0,originalChannels:t.originalBuffer?.numberOfChannels||0,channels:t.buffer.numberOfChannels,frames:t.buffer.length,sampleRate:t.buffer.sampleRate})));
+   const buffers=new Map();
+   snapshot.tracks.forEach((t,i)=>{buffers.set(audio[i].hash,t.buffer);if(t.originalBuffer)buffers.set(audio[i].originalHash,t.originalBuffer);});
+   // Solo viaja el audio que el servidor no tiene; si borró alguno, pide reenviarlo (409).
+   const send=async keys=>{
+    const form=new FormData();
+    form.append("manifest",JSON.stringify({name:snapshot.project.name,settings:snapshot.settings,preset:snapshot.preset,tracks:audio}));
+    keys.forEach(key=>form.append("blobs",pcmOf(buffers.get(key)),key));
+    await request("/"+snapshot.project.id,{method:"PUT",body:form});
+   };
+   try{await send([...buffers.keys()].filter(key=>!stored.current.has(key)));}
+   catch(e){if(!e.missing)throw e;e.missing.forEach(key=>stored.current.delete(key));await send(e.missing.filter(key=>buffers.has(key)));}
+   for(const key of buffers.keys())stored.current.add(key);
    if(alive.current&&latest.current.project?.id===snapshot.project.id){
     const now=latest.current;
     const unchanged=now.tracks===snapshot.tracks&&now.settings===snapshot.settings&&now.preset===snapshot.preset&&now.project.name===snapshot.project.name;
@@ -40,16 +63,18 @@ export function useProjectStore({tracks,setTracks,settings,preset,onSettings,onR
  async function load(id){
   const state=await(await request("/"+id)).json();
   const buffers=await Promise.all(state.tracks.map(async(t,i)=>{
-   const pcm=new Float32Array(await(await request("/"+id+"/tracks/"+i)).arrayBuffer());
-   if(pcm.length!==t.channels*t.frames)throw new Error("Un segmento guardado está incompleto.");
-   const buffer=new AudioBuffer({length:t.frames,numberOfChannels:t.channels,sampleRate:t.sampleRate});
-   for(let c=0;c<t.channels;c++)buffer.copyToChannel(pcm.subarray(c*t.frames,(c+1)*t.frames),c);
+   // El hash guardado identifica el buffer: el próximo guardado no vuelve a enviarlo.
+   const fetchPcm=async(key,length,message)=>{
+    const pcm=new Float32Array(await(await request("/"+id+"/blobs/"+key)).arrayBuffer());
+    if(pcm.length!==length)throw new Error(message);
+    return pcm;
+   };
+   const buffer=fromPcm(await fetchPcm(t.hash,t.channels*t.frames,"Un segmento guardado está incompleto."),t.frames,t.channels,t.sampleRate);
+   hashes.set(buffer,Promise.resolve(t.hash));stored.current.add(t.hash);
    let originalBuffer=null;
    if(t.originalFrames){
-    const original=new Float32Array(await(await request("/"+id+"/tracks/"+i+"?original=true")).arrayBuffer());
-    if(original.length!==t.originalFrames*t.originalChannels)throw new Error("La fuente original está incompleta.");
-    originalBuffer=new AudioBuffer({length:t.originalFrames,numberOfChannels:t.originalChannels,sampleRate:t.sampleRate});
-    for(let c=0;c<t.originalChannels;c++)originalBuffer.copyToChannel(original.subarray(c*t.originalFrames,(c+1)*t.originalFrames),c);
+    originalBuffer=fromPcm(await fetchPcm(t.originalHash,t.originalFrames*t.originalChannels,"La fuente original está incompleta."),t.originalFrames,t.originalChannels,t.sampleRate);
+    hashes.set(originalBuffer,Promise.resolve(t.originalHash));stored.current.add(t.originalHash);
    }
    return {id:t.id,laneId:t.laneId||"primary",name:t.name,gain:t.gain,offset:t.offset,muted:t.muted,processed:t.processed||false,sourceDescription:t.sourceDescription||"",effects:t.effects||[],renderedEffects:t.renderedEffects||"",buffer,originalBuffer};
   }));

@@ -1,4 +1,10 @@
-"""Proyectos locales y pistas PCM, guardados atómicamente en SQLite."""
+"""Proyectos locales y segmentos PCM, guardados atómicamente en SQLite.
+
+El audio se guarda por contenido: cada bloque PCM se identifica por su SHA-256 y el cliente
+solo envía los que el servidor todavía no tiene. Los proyectos comparten bloques idénticos
+(duplicar no copia audio) y los que ya no usa ningún proyecto se borran al guardar.
+"""
+import hashlib
 import json
 import os
 import sqlite3
@@ -15,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 router = APIRouter(prefix="/projects")
 DATABASE = Path(os.environ.get("VOICEMASTER_DB", "/data/projects.sqlite3"))
 MAX_STORAGE = 512 * 1024 * 1024
+HASH = "^[0-9a-f]{64}$"
 
 class Settings(BaseModel):
     depth: float = Field(4, ge=0, le=10)
@@ -50,6 +57,8 @@ class Track(BaseModel):
     sourceDescription: str = Field("", max_length=180)
     effects: list[EffectLayer] = Field(default_factory=list, max_length=6)
     renderedEffects: str = Field("", max_length=100000)
+    hash: str = Field(pattern=HASH)
+    originalHash: str = Field("", pattern="^([0-9a-f]{64})?$")
     originalFrames: int = Field(0, ge=0, le=48000*924)
     originalChannels: int = Field(0, ge=0, le=2)
     channels: int = Field(ge=1, le=2)
@@ -62,6 +71,28 @@ class Project(BaseModel):
     preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer"] = "podcast"
     tracks: list[Track] = Field(default_factory=list, max_length=16)
 
+def digest(pcm):
+    return hashlib.sha256(pcm).hexdigest()
+
+def migrate(db):
+    """Convierte la tabla antigua `tracks` (audio por posición) en bloques por contenido."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracks'").fetchone():
+        return
+    with db:
+        for identifier, raw in db.execute("SELECT id,state FROM projects").fetchall():
+            state = json.loads(raw)
+            for index, track in enumerate(state.get("tracks", [])):
+                for position, key in ((index, "hash"), (index + 1000, "originalHash")):
+                    row = db.execute("SELECT pcm FROM tracks WHERE project_id=? AND position=?",
+                                     (identifier, position)).fetchone()
+                    if row is None:
+                        continue
+                    track[key] = digest(row[0])
+                    db.execute("INSERT OR IGNORE INTO blobs VALUES(?,?)", (track[key], row[0]))
+                    db.execute("INSERT OR IGNORE INTO project_blobs VALUES(?,?)", (identifier, track[key]))
+            db.execute("UPDATE projects SET state=? WHERE id=?", (json.dumps(state), identifier))
+        db.execute("DROP TABLE tracks")
+
 @contextmanager
 def database():
     DATABASE.parent.mkdir(parents=True, exist_ok=True)
@@ -72,12 +103,14 @@ def database():
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT NOT NULL, updated TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS tracks (
+        CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, pcm BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS project_blobs (
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-            position INTEGER NOT NULL, pcm BLOB NOT NULL,
-            PRIMARY KEY (project_id, position)
+            hash TEXT NOT NULL REFERENCES blobs(hash),
+            PRIMARY KEY (project_id, hash)
         );
     """)
+    migrate(connection)
     try:
         with connection:
             yield connection
@@ -105,19 +138,23 @@ def load_project(identifier: str):
             raise HTTPException(404, "No se encontró el proyecto.")
         return {"id": identifier, "updated": row[1], **json.loads(row[0])}
 
-@router.get("/{identifier}/tracks/{index}")
-def load_track(identifier: str, index: int, original: bool = False):
+@router.get("/{identifier}/blobs/{key}")
+def load_blob(identifier: str, key: str):
     with database() as db:
-        row = db.execute("SELECT pcm FROM tracks WHERE project_id=? AND position=?",
-                         (project_id(identifier), index + (1000 if original else 0))).fetchone()
+        row = db.execute("SELECT b.pcm FROM project_blobs r JOIN blobs b ON b.hash=r.hash "
+                         "WHERE r.project_id=? AND r.hash=?", (project_id(identifier), key)).fetchone()
         if row is None:
-            raise HTTPException(404, "No se encontró la pista.")
+            raise HTTPException(404, "No se encontró el segmento.")
         return Response(row[0], media_type="application/octet-stream")
 
 @router.put("/{identifier}")
 def save_project(identifier: str, manifest: str = Form(...),
-                 audio: list[UploadFile] = File(default=[]),
-                 originals: list[UploadFile] = File(default=[])):
+                 blobs: list[UploadFile] = File(default=[])):
+    """Guarda el manifiesto; `blobs` lleva solo el PCM nuevo, con su hash como nombre de archivo.
+
+    Si el servidor no tiene un bloque que el manifiesto usa, responde 409 con la lista
+    `missing` para que el cliente lo reenvíe.
+    """
     identifier = project_id(identifier)
     try:
         if len(manifest) > 100_000:
@@ -126,45 +163,49 @@ def save_project(identifier: str, manifest: str = Form(...),
             state = Project.model_validate_json(manifest)
         except ValidationError as exc:
             raise HTTPException(422, "Los datos del proyecto no son válidos.") from exc
-        if len(state.tracks) != len(audio):
-            raise HTTPException(422, "Faltan archivos de pistas.")
-        if sum(bool(t.originalFrames) for t in state.tracks) != len(originals):
-            raise HTTPException(422, "Faltan fuentes originales del proyecto.")
         total = sum((t.channels * t.frames + t.originalChannels*t.originalFrames) * 4 for t in state.tracks)
         if total > MAX_STORAGE:
             raise HTTPException(413, "El proyecto supera los 512 MB de audio PCM.")
-        blobs = []
-        for track, upload in zip(state.tracks, audio):
-            expected = track.channels * track.frames * 4
-            pcm = upload.file.read(expected + 1)
-            if len(pcm) != expected or not np.isfinite(np.frombuffer(pcm, dtype="<f4")).all():
-                raise HTTPException(422, "Una pista contiene datos PCM inválidos.")
-            blobs.append(pcm)
-        original_blobs = []
-        original_iterator = iter(originals)
-        for index, track in enumerate(state.tracks):
+        # Tamaño que debe tener cada bloque según los segmentos que lo usan.
+        expected = {}
+        for track in state.tracks:
+            needs = [(track.hash, track.channels * track.frames * 4)]
             if track.originalFrames:
-                if track.originalChannels not in (1, 2):
-                    raise HTTPException(422, "Canales originales inválidos.")
-                expected = track.originalFrames * track.originalChannels * 4
-                pcm = next(original_iterator).file.read(expected + 1)
-                if len(pcm) != expected or not np.isfinite(np.frombuffer(pcm, dtype="<f4")).all():
+                if track.originalChannels not in (1, 2) or not track.originalHash:
                     raise HTTPException(422, "Fuente original inválida.")
-                original_blobs.append((index + 1000, pcm))
+                needs.append((track.originalHash, track.originalChannels * track.originalFrames * 4))
+            for key, size in needs:
+                if expected.setdefault(key, size) != size:
+                    raise HTTPException(422, "Un segmento contiene datos PCM inválidos.")
+        uploaded = {}
+        for upload in blobs:
+            key = upload.filename or ""
+            if key not in expected:
+                raise HTTPException(422, "Se envió audio que el proyecto no usa.")
+            pcm = upload.file.read(expected[key] + 1)
+            if (len(pcm) != expected[key] or digest(pcm) != key
+                    or not np.isfinite(np.frombuffer(pcm, dtype="<f4")).all()):
+                raise HTTPException(422, "Un segmento contiene datos PCM inválidos.")
+            uploaded[key] = pcm
         updated = datetime.now(timezone.utc).isoformat()
         with database() as db:
+            marks = ",".join("?" * len(expected))
+            stored = {row[0] for row in db.execute(f"SELECT hash FROM blobs WHERE hash IN ({marks})", list(expected))} if expected else set()
+            missing = sorted(set(expected) - stored - set(uploaded))
+            if missing:
+                raise HTTPException(409, {"message": "Faltan segmentos de audio.", "missing": missing})
+            db.executemany("INSERT OR IGNORE INTO blobs VALUES(?,?)", uploaded.items())
             db.execute(
                 "INSERT INTO projects(id,name,state,updated) VALUES(?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name,state=excluded.state,updated=excluded.updated",
                 (identifier, state.name, state.model_dump_json(), updated),
             )
-            db.execute("DELETE FROM tracks WHERE project_id=?", (identifier,))
-            db.executemany("INSERT INTO tracks(project_id,position,pcm) VALUES(?,?,?)",
-                           [(identifier, i, blob) for i, blob in enumerate(blobs)] +
-                           [(identifier, i, blob) for i, blob in original_blobs])
-        return {"id": identifier, "name": state.name, "updated": updated}
+            db.execute("DELETE FROM project_blobs WHERE project_id=?", (identifier,))
+            db.executemany("INSERT INTO project_blobs VALUES(?,?)", [(identifier, key) for key in expected])
+            db.execute("DELETE FROM blobs WHERE hash NOT IN (SELECT hash FROM project_blobs)")
+        return {"id": identifier, "name": state.name, "updated": updated, "uploaded": len(uploaded)}
     finally:
-        for upload in [*audio, *originals]:
+        for upload in blobs:
             upload.file.close()
 
 @router.post("/{identifier}/duplicate")
@@ -180,6 +221,7 @@ def duplicate_project(identifier: str):
         updated = datetime.now(timezone.utc).isoformat()
         db.execute("INSERT INTO projects VALUES(?,?,?,?)",
                    (duplicate, state["name"], json.dumps(state), updated))
-        db.execute("INSERT INTO tracks SELECT ?,position,pcm FROM tracks WHERE project_id=?",
+        # Los bloques se comparten: duplicar no copia audio.
+        db.execute("INSERT INTO project_blobs SELECT ?,hash FROM project_blobs WHERE project_id=?",
                    (duplicate, identifier))
     return {"id": duplicate, "name": state["name"], "updated": updated}

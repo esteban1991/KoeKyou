@@ -92,8 +92,15 @@ SQLite conserva el audio PCM float32, cortes, posiciones, volúmenes, silencios,
 fuentes originales, resultados procesados, cadenas activas/inactivas y todos los controles. Los cortes se guardan
 como audio editado. El historial Deshacer no se conserva al recargar.
 
+Guardado incremental: cada bloque de audio (segmento procesado y su original) se identifica por el
+SHA-256 de su PCM. Al guardar solo se envía el manifiesto y el audio que el servidor aún no tiene;
+mover, renombrar, cambiar volumen o ajustes no sube audio. Si falta un bloque, la API responde 409
+con la lista `missing` y el cliente lo reenvía. Proyectos y segmentos idénticos comparten bloques
+(duplicar no copia audio) y los bloques que ya nadie usa se borran al guardar. Las bases antiguas
+se migran solas al arrancar. (SHA-256 en lugar de MD5 porque WebCrypto no incluye MD5.)
+
 El autoguardado espera 700 ms desde el último cambio y muestra Guardado localmente
-al finalizar. Durante la grabación crea una toma provisional cada 5 segundos;
+al finalizar. Durante la grabación crea un segmento provisional cada 5 segundos;
 Detener guarda la versión final. Una recarga recupera el último guardado confirmado.
 Cerrar durante la captura puede perder los últimos segundos.
 
@@ -101,7 +108,7 @@ Base: /data/projects.sqlite3, en el volumen Docker projects-data.
 Actualizar o recrear los contenedores conserva el volumen.
 **docker compose down -v elimina el volumen y sus proyectos.**
 
-Límite: 512 MB de PCM y 16 pistas por proyecto. Los errores de guardado aparecen
+Límite: 512 MB de PCM y 16 segmentos por proyecto. Los errores de guardado aparecen
 en pantalla. El micrófono requiere localhost/HTTPS y permiso del usuario.
 
 ## Exportar a Audacity o DaVinci Resolve
@@ -141,6 +148,7 @@ porque Rust no está disponible.
 npm install
 npx playwright install chromium
 npm run test:editor
+node tests/incremental.mjs   # guardado incremental
 ```
 
 Opcional: PLAYWRIGHT_CHROMIUM_EXECUTABLE apunta a un Chromium ya instalado.
