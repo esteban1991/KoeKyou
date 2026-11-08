@@ -1,4 +1,4 @@
-# VoiceMaster Pro
+# Koe-Kyō (声響)
 
 Estudio de voz local con React, Vite, Tailwind 4, Tauri 2 y FastAPI/pedalboard.
 Frontend y motor de audio dockerizados; aplicación Tauri nativa.
@@ -211,3 +211,9 @@ Se alimenta de un AnalyserNode real: responde al audio reproducido, a su loop y 
 Durante la grabación analiza el micrófono sin enviarlo a los altavoces.
 La onda de edición se mantiene disponible para cortar y mover.
 En silencio las barras bajan; al detener se asientan. Respeta movimiento reducido y limita la tasa de dibujo.
+
+## Identidad Koe-Kyō (声響)
+El título neón aparece arriba; la pestaña y la ventana nativa usan el nuevo nombre.
+El obake de la esquina inferior izquierda flota, parpadea y saluda al pulsarlo.
+La × lo oculta y el pequeño botón inferior lo recupera. Respeta movimiento reducido.
+La base de proyectos y el volumen Docker conservan sus identificadores para preservar las sesiones existentes.

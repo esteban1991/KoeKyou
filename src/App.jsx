@@ -1,3 +1,4 @@
+import Obake from "./Obake";
 import {useCallback,useEffect,useRef,useState,useMemo} from "react";
 import {AudioLines,SlidersHorizontal,RotateCcw,ChevronLeft,ChevronRight,X,Sparkles} from "lucide-react";
 import {masterDefaults} from "./fx";
@@ -55,7 +56,7 @@ export default function App(){
  }
  return <div className="app-shell">
   <aside className={"sidebar fx-sidebar "+(open?"":"fx-collapsed")}>
-   <div className="brand"><span className="brand-icon"><AudioLines size={22}/></span>{open&&<>VoiceMaster<span className="pro">PRO</span></>}</div>
+   <div className="brand"><span className="brand-icon koe-symbol" lang="ja">声</span>{open&&<>Koe-Kyō<span className="pro" lang="ja">声響</span></>}</div>
    <button className="toggle-effects" disabled={!target} aria-label={open?"Ocultar filtros":"Mostrar filtros"} onClick={()=>setShowEffects(v=>!v)}>{open?<ChevronLeft size={16}/>:<ChevronRight size={16}/>}</button>
    {open&&<>
     <div className="fx-target"><span className="eyebrow">EFECTOS AUTOMÁTICOS</span><h2>{target?target.name:"Selecciona una pista"}</h2><p>Se escuchan y se exportan en esta misma pista.</p></div>
@@ -69,8 +70,8 @@ export default function App(){
     <div className="fx-apply"><p role="status" className={target?.fxError?"error":"success-note"} data-testid="fx-status">{target?.fxError||(layers.length&&!layers.some(l=>l.enabled!==false)?"Efectos agregados · sin activar":target?.fxStatus||"Audio original · sin efectos")}</p>{target?.fxError&&<button onClick={()=>editor.current?.retryEffects()}>Reintentar efectos</button>}<small>Actualización automática. No necesitas aplicar ni crear otro audio.</small>{message&&<p>{message}</p>}</div>
    </>}
   </aside>
-  <main><header><span>VoiceMaster Pro <span className="muted">/</span> Estudio de voz</span><span className={"status "+(online?"ready":"")}><i/>{online?"Motor conectado":"Esperando al motor"}</span></header>
-   <section className="workspace"><div className="eyebrow"><span/> ESTUDIO PERSONAL DE AUDIO</div><div className="title-row"><div><h1>Tu voz. En su mejor versión.</h1><p>Graba, mueve, corta y dale tu sonido.</p></div></div>
+  <main><header><span className="header-brand">Koe-Kyō <span lang="ja">声響</span><span className="muted">/</span>Estudio de voz</span><span className={"status "+(online?"ready":"")}><i/>{online?"Motor conectado":"Esperando al motor"}</span></header>
+   <section className="workspace"><div className="eyebrow"><span/> ESTUDIO PERSONAL DE AUDIO</div><div className="title-row"><div><h1 className="koe-wordmark" aria-label="Koe-Kyō (声響)"><span>Koe-Kyō</span><span className="koe-kanji" lang="ja">(声響)</span></h1><p>Tu voz, en su mejor versión. Graba, mueve, corta y dale tu sonido.</p></div></div>
     <section className="panel master-panel" aria-label="Ajustes maestros">
      <div className="master-heading"><span className="eyebrow"><Sparkles size={12}/> AJUSTES MAESTROS</span><small>Se aplican a cada pista con efectos activos. La sonoridad se fija al final de la cadena con pico verdadero de -1 dBTP.</small></div>
      <div className="master-grid">
@@ -85,8 +86,9 @@ export default function App(){
      </div>
     </section>
     <AudioEditor editorRef={editor} onTrackSelection={onSelection} settings={master} preset={preset} onRestoreSettings={s=>setMaster(pickMaster(s))} onShowEffects={()=>setShowEffects(true)}/>
-    <footer><span>VOICEMASTER PRO</span><span>Audio local · WAV 24 bits · Audacity / DaVinci Resolve</span></footer>
+    <footer><span>KOE-KYŌ · 声響</span><span>Audio local · WAV 24 bits · Audacity / DaVinci Resolve</span></footer>
    </section>
   </main>
+  <Obake/>
  </div>;
 }

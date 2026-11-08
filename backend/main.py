@@ -14,7 +14,7 @@ from mastering import denoise_ai, master, loudness, true_peak_db
 from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, Compressor, HighShelfFilter, NoiseGate, Reverb
 from pedalboard.io import AudioFile
 
-app = FastAPI(title="VoiceMaster Pro", docs_url=None, redoc_url=None)
+app = FastAPI(title="Koe-Kyō (声響)", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
@@ -131,7 +131,7 @@ def process_audio(
             return Response(
                 content=output.getvalue(), media_type="audio/wav",
                 headers={
-                    "Content-Disposition": 'attachment; filename="voicemaster.wav"',
+                    "Content-Disposition": 'attachment; filename="koe-kyo.wav"',
                     "X-Input-LUFS": metric(input_lufs),
                     "X-Output-LUFS": metric(loudness(processed, rate)),
                     "X-True-Peak": metric(true_peak_db(processed, rate)),

@@ -44,7 +44,7 @@ export default function AudioEditor({editorRef,onTrackSelection,disabled=false,s
  const frame=useRef(null),menu=useRef(null),latestTracks=useRef(tracks);latestTracks.current=tracks;
  const [capture,setCapture]=useState({peaks:[],frames:0});
  const [mode,setMode]=useState(null),[placement,setPlacement]=useState("end"),[destination,setDestination]=useState("current"),[zoom,setZoom]=useState(64),[dragPreview,setDragPreview]=useState(null),[tempo,setTempo]=useState(1),[fxStates,setFxStates]=useState({}),[reveal,setReveal]=useState(null);
- const viewport=useRef(null),replacePicker=useRef(null),drag=useRef(null),scrub=useRef(null),fxJobs=useRef(new Map()),fxQueue=useRef(Promise.resolve()),playback=useRef({playing:false,time:0});playback.current={playing,time:playTime};
+ const viewport=useRef(null),replacePicker=useRef(null),drag=useRef(null),scrub=useRef(null),sliderScrub=useRef(null),fxJobs=useRef(new Map()),fxQueue=useRef(Promise.resolve()),playback=useRef({playing:false,time:0});playback.current={playing,time:playTime};
  const outputAnalyser=useRef(null),micAnalyser=useRef(null);
  const playbackSession=useRef({generation:0,pending:false});
  const playOptions=useRef({loop:false,scope:"all",selected:null});playOptions.current={loop:loopEnabled,scope:playScope,selected};
@@ -78,7 +78,7 @@ export default function AudioEditor({editorRef,onTrackSelection,disabled=false,s
  function seek(e){
   if(locked)return;
   e.preventDefault();e.stopPropagation();
-  scrub.current={wasPlaying:playback.current.playing};stopPlayback();
+  scrub.current={wasPlaying:playback.current.playing||playbackSession.current.pending};stopPlayback();
   e.currentTarget.setPointerCapture(e.pointerId);
   setPlayTime(timeAt(e));setPlacement("cursor");
  }
@@ -92,9 +92,22 @@ export default function AudioEditor({editorRef,onTrackSelection,disabled=false,s
  function scrubEnd(e){
   const s=scrub.current;if(!s)return;scrub.current=null;
   // Si sonaba, sigue desde el nuevo punto al soltar.
-  if(s.wasPlaying)playTracks(latestTracks.current,timeAt(e)).catch(err=>setError(err.message));
+  if(s.wasPlaying)resumeAt(timeAt(e));
  }
  const scrubbing={onPointerMove:scrubMove,onPointerUp:scrubEnd,onPointerCancel:scrubEnd};
+ // Barra de reproducción: si sonaba, sigue sonando desde el punto elegido sin pulsar reproducir.
+ const resumeAt=time=>playTracks(latestTracks.current,time).catch(err=>setError(err.message));
+ const transport={
+  onPointerDown:()=>{sliderScrub.current={wasPlaying:playback.current.playing||playbackSession.current.pending};stopPlayback();},
+  onChange:e=>{
+   const time=Number(e.target.value);setPlayTime(time);
+   if(sliderScrub.current)return;
+   // Teclado: cada paso salta de inmediato.
+   const wasPlaying=playback.current.playing||playbackSession.current.pending;stopPlayback();if(wasPlaying)resumeAt(time);
+  },
+  onPointerUp:e=>{const s=sliderScrub.current;sliderScrub.current=null;if(s?.wasPlaying)resumeAt(Number(e.currentTarget.value));},
+  onPointerCancel:e=>{const s=sliderScrub.current;sliderScrub.current=null;if(s?.wasPlaying)resumeAt(Number(e.currentTarget.value));}
+ };
  useEffect(()=>{
   const v=viewport.current;if(reveal===null||!v)return;
   const x=reveal/timelineSpan*v.scrollWidth;
@@ -387,7 +400,7 @@ export default function AudioEditor({editorRef,onTrackSelection,disabled=false,s
   setWorking(true);setError("");
   try{
    if(fxPending)throw new Error("Espera a que terminen de actualizarse los efectos.");
-   const buffer=mixTracks(editingContext(),tracks);download(buffer,"VoiceMaster-mezcla.wav");
+   const buffer=mixTracks(editingContext(),tracks);download(buffer,"koe-kyo-mezcla.wav");
   }catch(e){setError(e.message);}finally{setWorking(false);}
  }
  return <section className="panel multitrack" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();if(!locked)importFiles(Array.from(e.dataTransfer.files));}}>
@@ -438,7 +451,7 @@ export default function AudioEditor({editorRef,onTrackSelection,disabled=false,s
   {(!!tracks.length||recording)&&<NeonSpectrum analyser={recording?micAnalyser.current:outputAnalyser.current} active={recording||playing} recording={recording}/>}
   {!!tracks.length&&<div className="transport">
    <div><strong>REPRODUCCIÓN</strong><output data-testid="playback-time">{clock(playTime)} / {clock(duration)}</output></div>
-   <input aria-label="Posición de reproducción" disabled={locked} type="range" min="0" max={duration||1} step="0.01" value={Math.min(playTime,duration)} onChange={e=>{stopPlayback();setPlayTime(Number(e.target.value));}} style={{"--fill":(duration?playTime/duration*100:0)+"%","--accent":"#e4b47d"}}/>
+   <input aria-label="Posición de reproducción" disabled={locked} type="range" min="0" max={duration||1} step="0.01" value={Math.min(playTime,duration)} {...transport} style={{"--fill":(duration?playTime/duration*100:0)+"%","--accent":"#e4b47d"}}/>
 
   </div>}
   <div className="timeline-viewport" ref={viewport}><div className="timeline-content" style={{width:timelineWidth}}>

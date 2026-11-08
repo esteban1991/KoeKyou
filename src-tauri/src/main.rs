@@ -31,5 +31,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("No se pudo iniciar VoiceMaster Pro");
+        .expect("No se pudo iniciar Koe-Kyō");
 }
