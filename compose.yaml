@@ -1,0 +1,31 @@
+name: voicemaster-pro
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - projects-data:/data
+    init: true
+    # DeepFilterNet + PyTorch: ~1,9 GB de pico con 15 min en stereo.
+    mem_limit: 3g
+    environment:
+      # Devuelve al sistema la memoria de bloques grandes de numpy/torch.
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      MALLOC_TRIM_THRESHOLD_: "131072"
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  frontend:
+    build: .
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  projects-data:

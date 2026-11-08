@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import {chromium} from "@playwright/test";
+import {wav} from "../src/audio.js";
+function sample(seconds,hz){
+ const data=Float32Array.from({length:Math.round(seconds*48000)},(_,i)=>.08*Math.sin(2*Math.PI*hz*i/48000));
+ return {numberOfChannels:1,length:data.length,sampleRate:48000,getChannelData:()=>data};
+}
+const inputs=await Promise.all([[.3,180],[.2,220],[.7,440]].map(async([s,h])=>Buffer.from(await wav(sample(s,h)).arrayBuffer())));
+const browser=await chromium.launch({headless:true,args:["--use-fake-device-for-media-stream","--use-fake-ui-for-media-stream"],...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{})});
+try{
+ const page=await browser.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));page.on("dialog",d=>d.accept());
+ await page.addInitScript(()=>{
+  window.__audioSources=[];window.__analysers=[];
+  const createAnalyser=AudioContext.prototype.createAnalyser;
+  AudioContext.prototype.createAnalyser=function(){const node=createAnalyser.call(this);window.__analysers.push(node);return node;};
+  const original=AudioContext.prototype.createBufferSource;
+  AudioContext.prototype.createBufferSource=function(){
+   const node=original.call(this),start=node.start.bind(node),stop=node.stop.bind(node);
+   node.start=(...args)=>{const result=start(...args);node.__active=true;return result;};
+   node.stop=(...args)=>{node.__active=false;return stop(...args);};
+   node.addEventListener("ended",()=>node.__active=false);
+   window.__audioSources.push(node);return node;
+  };
+ });
+ await page.goto("http://localhost:5173");
+ const saved=async()=>{try{await page.waitForFunction(()=>document.querySelector('[data-testid="save-status"]')?.textContent==="Guardado localmente"&&!document.querySelector('select[aria-label="Abrir proyecto"]')?.disabled,{},{timeout:6000});}catch(e){console.log("SAVE DEBUG",await page.getByTestId("save-status").textContent(),await page.getByRole("alert").allTextContents(),errors);throw e;}};
+ await saved();await page.locator(".studio-menu summary").click();await page.getByRole("button",{name:"Nuevo proyecto",exact:true}).click();await saved();
+ await page.getByLabel("Nombre del proyecto",{exact:true}).fill("Prueba Loop "+Date.now());
+ const add=async(name,index)=>page.locator("input[type=file][multiple]").setInputFiles({name:name+".wav",mimeType:"audio/wav",buffer:inputs[index]});
+ await add("voz-a",0);await page.getByRole("button",{name:"Mover segmento voz-a",exact:true}).waitFor();
+ await add("voz-b",1);await page.getByRole("button",{name:"Mover segmento voz-b",exact:true}).waitFor();
+ await page.getByRole("combobox",{name:"Pista de destino",exact:true}).selectOption("new");await add("musica",2);await page.getByRole("button",{name:"Mover segmento musica",exact:true}).waitFor();
+ assert.equal(await page.locator(".track-list>.timeline-lane").count(),2);
+ await page.getByRole("button",{name:"Mover segmento voz-b",exact:true}).click();
+ await page.getByRole("combobox",{name:"Alcance de reproducción",exact:true}).selectOption("clip");
+ await page.getByRole("checkbox",{name:"Loop",exact:true}).check();
+ await page.getByRole("button",{name:"Reproducir segmento",exact:true}).click();await page.waitForTimeout(570);
+ let node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop};});
+ assert(Math.abs(node.duration-.2)<.001);assert(node.loop);
+ const spectrum=page.getByTestId("neon-spectrum");await spectrum.waitFor();
+ const realFrequency=await page.evaluate(()=>{const a=window.__analysers[0],v=new Uint8Array(a.frequencyBinCount);a.getByteFrequencyData(v);return Math.max(...v);});
+ assert(realFrequency>30);
+ const glow=await spectrum.evaluate(el=>{const p=el.getContext("2d").getImageData(0,0,el.width,Math.floor(el.height*.4)).data;let n=0;for(let i=0;i<p.length;i+=4)if(p[i+1]>150||p[i+2]>160)n++;return n;});
+ assert(glow>10);
+ await page.locator(".neon-spectrum").screenshot({path:"tests/neon-preview.png"});
+
+ assert(Number((await page.getByTestId("loop-cycle").textContent()).replace(/\D/g,""))>=2);
+ const cursor=Number(await page.getByRole("slider",{name:"Posición de reproducción",exact:true}).inputValue());assert(cursor>=.3&&cursor<=.5);
+ await page.getByRole("button",{name:"Mover segmento voz-a",exact:true}).click();await page.waitForTimeout(400);
+ node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop};});assert(Math.abs(node.duration-.3)<.001);assert(node.loop);
+ await page.getByRole("combobox",{name:"Alcance de reproducción",exact:true}).selectOption("lane");await page.waitForTimeout(650);
+ node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop};});assert(Math.abs(node.duration-.5)<.001);assert(node.loop);
+ await page.getByRole("combobox",{name:"Alcance de reproducción",exact:true}).selectOption("all");await page.waitForTimeout(800);
+ node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop};});assert(Math.abs(node.duration-.7)<.001);assert(node.loop);
+ await page.screenshot({path:"tests/loop-preview.png",fullPage:true});
+ await page.getByRole("checkbox",{name:"Loop",exact:true}).uncheck();await page.waitForTimeout(950);
+ await page.getByRole("button",{name:"Escuchar mezcla",exact:true}).waitFor();
+ const event=page.waitForEvent("download");await page.getByRole("button",{name:"Exportar mezcla WAV",exact:true}).click();
+ const d=await event,s=await d.createReadStream(),parts=[];for await(const c of s)parts.push(c);
+ assert.equal((Buffer.concat(parts).length-44)/6,33600);
+ await page.getByRole("button",{name:"Mover segmento voz-b",exact:true}).click();
+ await page.getByLabel("Posición (s)",{exact:true}).fill("2");
+ await page.getByRole("button",{name:"Reproducir este audio en loop",exact:true}).click();
+ await page.waitForTimeout(650);
+ node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop,active:window.__audioSources.filter(n=>n.__active).length};});
+ assert(Math.abs(node.duration-.2)<.001);assert(node.loop);assert.equal(node.active,1);
+ const offsetCursor=Number(await page.getByRole("slider",{name:"Posición de reproducción",exact:true}).inputValue());
+ assert(offsetCursor>=2&&offsetCursor<=2.2);
+ assert((await page.getByTestId("loop-target").textContent()).includes("voz-b"));
+ for(const scope of ["all","lane","clip","all","clip"])await page.getByRole("combobox",{name:"Alcance de reproducción",exact:true}).selectOption(scope);
+ await page.waitForTimeout(300);
+ node=await page.evaluate(()=>{const s=window.__audioSources.at(-1);return {duration:s.buffer.duration,loop:s.loop,active:window.__audioSources.filter(n=>n.__active).length};});
+ assert.equal(node.active,1);assert(node.loop);assert(Math.abs(node.duration-.2)<.001);
+ await page.screenshot({path:"tests/solo-loop-preview.png",fullPage:true});
+ await page.getByRole("button",{name:"Detener",exact:true}).click();
+ assert.equal(await page.evaluate(()=>window.__audioSources.filter(n=>n.__active).length),0);
+ const stoppedGlow=await page.getByTestId("neon-spectrum").evaluate(el=>{const p=el.getContext("2d").getImageData(0,0,el.width,Math.floor(el.height*.4)).data;let n=0;for(let i=0;i<p.length;i+=4)if(p[i+1]>150||p[i+2]>160)n++;return n;});
+ assert.equal(stoppedGlow,0);await saved();
+ await page.context().grantPermissions(["microphone"]);
+ await page.locator(".studio-menu summary").click();await page.getByRole("button",{name:"Nuevo proyecto",exact:true}).click();await saved();
+ await page.locator(".studio-menu summary").click();await page.locator(".menu-popover").getByRole("button",{name:/^Grabar/}).click();
+ await page.getByRole("button",{name:"Grabar voz",exact:true}).click();
+ await page.getByText("MICRÓFONO EN DIRECTO",{exact:true}).waitFor();
+ await page.waitForFunction(()=>{
+  const a=window.__analysers.at(-1),v=new Uint8Array(a.frequencyBinCount);a.getByteFrequencyData(v);return Math.max(...v)>30;
+ },{},{timeout:5000});
+ await page.locator(".neon-spectrum").screenshot({path:"tests/neon-recording-preview.png"});
+ await page.getByRole("button",{name:/Detener ·/}).click();await saved();
+ assert.deepEqual(errors,[]);
+ console.log("PASS visualizador: frecuencias reales, barras neón encendidas, silencio al detener y micrófono simulado");
+ console.log("PASS: loop directo del bloque desplazado, cambios rápidos sin fuentes superpuestas y parada completa");
+ console.log("PASS Loop: segmento, cambio de selección, pista sin música, grabación completa, cursor cíclico, desactivar y WAV sin alargar");
+}finally{await browser.close();}

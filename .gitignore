@@ -1,0 +1,9 @@
+node_modules/
+dist/
+src-tauri/target/
+__pycache__/
+.venv/
+
+# Captura de referencia de plugins comerciales: no se publica
+Screenshot *.png
+*.pyc
