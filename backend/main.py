@@ -9,7 +9,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from projects import router as projects_router
-from voice_fx import enhance, dynamic_deess, MICROPHONES
+from voice_fx import enhance, dynamic_deess, reduce_breaths, MICROPHONES
 from mastering import denoise_ai, master, loudness, true_peak_db
 from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, Compressor, HighShelfFilter, NoiseGate, Reverb
 from pedalboard.io import AudioFile
@@ -49,6 +49,7 @@ def process_audio(
     pitch: float = Form(0, ge=-6, le=6),
     roomtail: float = Form(0, ge=0, le=100),
     ai_denoise: float = Form(0, ge=0, le=100),
+    breath: float = Form(0, ge=0, le=100),
     mic: Literal["generic", "dynamic", "condenser", "usb", "lavalier", "laptop"] = Form("generic"),
     loudness_target: Literal["off", "-14", "-16", "-19"] = Form("-16", alias="loudness"),
     preset: Literal["podcast", "room", "outdoor", "cathedral", "announcer"] = Form("podcast"),
@@ -87,6 +88,8 @@ def process_audio(
             input_lufs = loudness(audio, rate)
             # La IA trabaja mejor sobre la toma original, antes de cualquier EQ.
             audio = denoise_ai(audio, rate, ai_denoise / 100)
+            # Antes del nivelado y la compresión, que subirían las respiraciones.
+            audio = reduce_breaths(audio, rate, breath)
             audio = enhance(audio, rate, denoise, leveler, pitch, roomtail)
             if cleanup > 0:
                 audio = NoiseGate(

@@ -3,7 +3,7 @@ import {AudioLines,SlidersHorizontal,RotateCcw,ChevronLeft,ChevronRight,X,Sparkl
 import {masterDefaults} from "./fx";
 import AudioEditor from "./AudioEditor";
 import "./editor.css";
-const initial={depth:4,clarity:3,compression:55,cleanup:25,deess:0,denoise:0,leveler:0,pitch:0,roomtail:0};
+const initial={depth:4,clarity:3,compression:55,cleanup:25,deess:0,denoise:0,leveler:0,pitch:0,roomtail:0,breath:0};
 const presets={
  podcast:{name:"Podcast",description:"Voz cálida y cercana.",settings:{depth:4,clarity:3,compression:55,cleanup:25}},
  announcer:{name:"Locutor",description:"Más cuerpo, presencia y nivelado.",settings:{depth:6,clarity:4,compression:70,cleanup:30,deess:40,leveler:65}},
@@ -21,7 +21,8 @@ const controls=[
  ["compression","Compresión","Empareja la voz",0,100,"%"],["cleanup","Limpieza","Puerta de ruido",0,100,"%"],
  ["deess","De-esser","Suaviza las eses",0,100,"%"],["denoise","Ruido continuo","Reducción espectral sin IA",0,100,"%"],
  ["leveler","Nivelado automático","Ajusta el volumen medio",0,100,"%"],["pitch","Tono","Grave o agudo",-6,6,"st"],
- ["roomtail","Colas de sala","Atenúa colas suaves en pausas",0,100,"%"]
+ ["roomtail","Colas de sala","Atenúa colas suaves en pausas",0,100,"%"],
+ ["breath","Respiraciones","Baja las tomas de aire entre frases",0,100,"%"]
 ];
 export default function App(){
  const editor=useRef(null),previousSelection=useRef({id:null,hasEffects:false}),lastAi=useRef(60);

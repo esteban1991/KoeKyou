@@ -28,6 +28,7 @@ class Settings(BaseModel):
     pitch: float = Field(0, ge=-6, le=6)
     roomtail: float = Field(0, ge=0, le=100)
     ai_denoise: float = Field(0, ge=0, le=100)
+    breath: float = Field(0, ge=0, le=100)
     mic: Literal["generic", "dynamic", "condenser", "usb", "lavalier", "laptop"] = "generic"
     loudness: Literal["off", "-14", "-16", "-19"] = "-16"
 
