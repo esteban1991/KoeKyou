@@ -113,11 +113,11 @@ try{
  await page.locator("input[type=file]:not([multiple])").setInputFiles({name:"original.wav",mimeType:"audio/wav",buffer:input});
  await saved();const restored=await state();assert.equal(restored.tracks[0].frames,96000);assert.equal(restored.tracks[0].effects.length,0);
  await page.getByRole("combobox",{name:"Pista de destino",exact:true}).selectOption("new");
- await page.locator("input[type=file][multiple]").setInputFiles({name:"musica.wav",mimeType:"audio/wav",buffer:input});await saved();
+ await page.locator("input[type=file][multiple]").setInputFiles({name:"musica.wav",mimeType:"audio/wav",buffer:input});await page.waitForFunction(()=>document.querySelectorAll(".audio-track").length===2);await saved();
  const withMusic=await state();assert.equal(withMusic.tracks.length,2);assert.notEqual(withMusic.tracks[0].laneId,withMusic.tracks[1].laneId);assert.equal(withMusic.tracks[1].offset,0);
  assert.equal(await page.locator(".track-list>.timeline-lane").count(),2);
  await page.locator(".clip-handle").first().click();
- await page.locator("input[type=file][multiple]").setInputFiles({name:"otra-toma.wav",mimeType:"audio/wav",buffer:input});await saved();
+ await page.locator("input[type=file][multiple]").setInputFiles({name:"otra-toma.wav",mimeType:"audio/wav",buffer:input});await page.waitForFunction(()=>document.querySelectorAll(".audio-track").length===3);await saved();
  assert.equal(await page.locator(".track-list>.timeline-lane").count(),2);
  const three=await state();assert.equal(three.tracks[0].laneId,three.tracks[2].laneId);
  await page.screenshot({path:"tests/editor-preview.png",fullPage:true});
